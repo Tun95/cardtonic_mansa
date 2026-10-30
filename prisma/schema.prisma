@@ -1,0 +1,95 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Currency {
+  cNGN
+  cGHS
+  cXAF
+  USDx
+  EURx
+}
+
+enum TransactionType {
+  DEPOSIT
+  SWAP
+  TRANSFER
+}
+
+/// LIVE = fresh from the provider, STALE = last known provider rates, FIXED = built-in table
+enum RateSource {
+  LIVE
+  STALE
+  FIXED
+}
+
+model Wallet {
+  id        String   @id @default(uuid())
+  email     String?  @unique
+  phone     String?  @unique
+  createdAt DateTime @default(now())
+
+  balances             Balance[]
+  sentTransactions     Transaction[] @relation("TransactionSender")
+  receivedTransactions Transaction[] @relation("TransactionReceiver")
+}
+
+/// One row per (wallet, currency). Rows are created with the wallet so they can always be locked.
+/// The migration adds CHECK (amount >= 0) as a last line of defence against negative balances.
+model Balance {
+  walletId  String
+  currency  Currency
+  amount    Decimal  @default(0) @db.Decimal(38, 8)
+  updatedAt DateTime @default(now())
+
+  wallet Wallet @relation(fields: [walletId], references: [id], onDelete: Cascade)
+
+  @@id([walletId, currency])
+}
+
+/// Immutable ledger entry. One row per deposit, swap or transfer.
+model Transaction {
+  id               String          @id @default(uuid())
+  type             TransactionType
+  senderWalletId   String?
+  receiverWalletId String?
+  sourceCurrency   Currency
+  sourceAmount     Decimal         @db.Decimal(38, 8)
+  destCurrency     Currency
+  destAmount       Decimal         @db.Decimal(38, 8)
+  rate             Decimal         @db.Decimal(38, 18)
+  rateSource       RateSource?
+  createdAt        DateTime        @default(now())
+
+  sender   Wallet? @relation("TransactionSender", fields: [senderWalletId], references: [id], onDelete: SetNull)
+  receiver Wallet? @relation("TransactionReceiver", fields: [receiverWalletId], references: [id], onDelete: SetNull)
+
+  @@index([senderWalletId, createdAt(sort: Desc)])
+  @@index([receiverWalletId, createdAt(sort: Desc)])
+  @@index([type])
+}
+
+/// Written in the same DB transaction as the money movement, so a key exists iff the operation committed.
+model IdempotencyKey {
+  id          String   @id
+  scope       String
+  key         String
+  requestHash String
+  response    Json?
+  createdAt   DateTime @default(now())
+
+  @@unique([scope, key])
+}
+
+/// Units of each currency per 1 USD. Pair rates are triangulated through USD.
+model FxRate {
+  currency    Currency   @id
+  perUsd      Decimal    @db.Decimal(38, 18)
+  source      RateSource
+  refreshedAt DateTime
+}

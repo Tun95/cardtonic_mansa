@@ -1,0 +1,34 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: mansa
+      POSTGRES_PASSWORD: mansa
+      POSTGRES_DB: mansa
+    ports:
+      - '5433:5432' # host 5433 -> avoids clashing with a local Postgres on 5432
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U mansa -d mansa']
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: 'postgresql://mansa:mansa@db:5432/mansa?schema=public&connection_limit=20'
+      # used by `docker compose run --rm api yarn test` (isolated "test" schema, same database)
+      TEST_DATABASE_URL: 'postgresql://mansa:mansa@db:5432/mansa?schema=test&connection_limit=20'
+      PORT: '3000'
+      FX_PROVIDER: live
+      SEED_ON_START: 'true'
+    ports:
+      - '3000:3000'
+
+volumes:
+  pgdata:
